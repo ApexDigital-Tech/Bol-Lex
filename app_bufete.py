@@ -3,6 +3,7 @@ import os
 import re
 import json
 import shutil
+import zipfile
 import subprocess
 import numpy as np
 from datetime import datetime
@@ -14,19 +15,19 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import Groq
 from markdown_pdf import MarkdownPdf, Section
+import gdown
 
-# Restringir consumo de CPU a nivel de sistema operativo
+# Restringir consumo de CPU
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 
 # =====================================================================
-# CONFIGURACIÓN DE OCR NATIVO (ALIGERADO EN HILOS DE CPU)
+# CONFIGURACIÓN DE OCR NATIVO
 # =====================================================================
 OCR_DISPONIBLE = False
 try:
     from rapidocr_onnxruntime import RapidOCR
     import pypdfium2 as pdfium
-    # Restricción de hilos de ONNX para no sobrecargar la laptop
     motor_ocr = RapidOCR()
     OCR_DISPONIBLE = True
 except Exception:
@@ -93,7 +94,6 @@ def listar_expedientes_locales() -> dict:
         ruta_c = os.path.join(ruta_base, c)
         meta = obtener_metadatos_caso(ruta_c)
         nom_corto = meta.get("titulo", "").strip()
-        # Evitar duplicación de nombre
         if nom_corto and nom_corto != c:
             etiqueta = f"{nom_corto} — [{c}]"
         else:
@@ -139,7 +139,38 @@ def eliminar_expediente_actual(codigo_caso: str):
     reiniciar_caso()
 
 # =====================================================================
-# 1. MOTOR RAG MULTIDISCIPLINARIO LOCAL
+# GESTIÓN DE ARCHIVOS ZIP Y GOOGLE DRIVE
+# =====================================================================
+def descomprimir_zip(buffer_o_ruta, carpeta_destino: str):
+    with zipfile.ZipFile(buffer_o_ruta, 'r') as zip_ref:
+        for info in zip_ref.infolist():
+            nombre_archivo = os.path.basename(info.filename)
+            if not nombre_archivo:
+                continue
+            if nombre_archivo.lower().endswith((".pdf", ".docx", ".txt")):
+                ruta_salida = os.path.join(carpeta_destino, nombre_archivo)
+                with zip_ref.open(info) as fuente, open(ruta_salida, "wb") as destino:
+                    shutil.copyfileobj(fuente, destino)
+
+def descargar_desde_gdrive(url_o_id: str, carpeta_destino: str) -> bool:
+    try:
+        if "folders" in url_o_id:
+            gdown.download_folder(url=url_o_id, output=carpeta_destino, quiet=False, use_cookies=False)
+        else:
+            salida = gdown.download(url=url_o_id, output=carpeta_destino + os.sep, quiet=False, fuzzy=True)
+            if salida and salida.endswith(".zip"):
+                descomprimir_zip(salida, carpeta_destino)
+                try:
+                    os.remove(salida)
+                except Exception:
+                    pass
+        return True
+    except Exception as e:
+        st.error(f"Error al descargar desde Google Drive: {e}")
+        return False
+
+# =====================================================================
+# MOTOR RAG LOCAL
 # =====================================================================
 def extraer_datos_pdf(ruta_pdf: str) -> dict:
     try:
@@ -192,7 +223,7 @@ def obtener_modelo_ia():
     return cliente, modelo_elegido
 
 # =====================================================================
-# 2. EXTRACTOR DOCUMENTAL CON CACHÉ (Ahorro de CPU)
+# EXTRACTOR DOCUMENTAL CON OCR
 # =====================================================================
 def extraer_texto_archivo(ruta_o_buffer, nombre: str, carpeta_caso: str = None) -> str:
     nl = nombre.lower()
@@ -208,27 +239,24 @@ def extraer_texto_archivo(ruta_o_buffer, nombre: str, carpeta_caso: str = None) 
             return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
 
         elif nl.endswith(".pdf"):
-            # 1. Si existe caché previo en disco, no gasta CPU
             if carpeta_caso:
                 ruta_cache = os.path.join(carpeta_caso, f"{nombre}.ocr_cache.txt")
                 if os.path.exists(ruta_cache):
                     with open(ruta_cache, "r", encoding="utf-8") as fc:
                         return fc.read()
 
-            # 2. Lectura directa de texto digital (0% costo de OCR)
             reader = PdfReader(ruta_o_buffer)
             paginas = [p.extract_text() or "" for p in reader.pages]
             texto_digital = "\n".join(paginas).strip()
             
-            if len(texto_digital) > 60:
+            if len(texto_digital) > 80:
                 if carpeta_caso:
                     with open(os.path.join(carpeta_caso, f"{nombre}.ocr_cache.txt"), "w", encoding="utf-8") as fc:
                         fc.write(texto_digital)
                 return texto_digital
 
-            # 3. Fallback a OCR sólo si no hay texto y limitado a 4 páginas
             if OCR_DISPONIBLE:
-                st.toast(f"🔍 OCR optimizado en: {nombre}...")
+                st.toast(f"🔍 OCR activado en: {nombre}...")
                 if isinstance(ruta_o_buffer, str):
                     doc_pdf = pdfium.PdfDocument(ruta_o_buffer)
                 else:
@@ -236,10 +264,10 @@ def extraer_texto_archivo(ruta_o_buffer, nombre: str, carpeta_caso: str = None) 
                     doc_pdf = pdfium.PdfDocument(ruta_o_buffer.read())
                 
                 texto_ocr = []
-                limite_pags = min(len(doc_pdf), 4)
+                limite_pags = min(len(doc_pdf), 6)
                 for idx in range(limite_pags):
                     page = doc_pdf[idx]
-                    bitmap = page.render(scale=1.2)
+                    bitmap = page.render(scale=1.4)
                     pil_img = bitmap.to_pil().convert("RGB")
                     img_array = np.array(pil_img)
                     
@@ -256,7 +284,7 @@ def extraer_texto_archivo(ruta_o_buffer, nombre: str, carpeta_caso: str = None) 
                             fc.write(resultado_final)
                     return resultado_final
             
-            return f"[Archivo {nombre}: no se detectó texto directo]."
+            return f"[Archivo escaneado {nombre}: no se detectó texto directo]."
         return ""
     except Exception as e:
         return f"Error procesando {nombre}: {e}"
@@ -273,12 +301,12 @@ def sincronizar_carpeta_caso(ruta_carpeta: str) -> str:
         for arch in archivos:
             ruta_completa = os.path.join(ruta_carpeta, arch)
             texto = extraer_texto_archivo(ruta_completa, arch, carpeta_caso=ruta_carpeta)
-            extracto = texto[:2500].strip()
+            extracto = texto[:3000].strip()
             acumulado += f"\n--- DOCUMENTO: {arch} ---\n{extracto}\n"
     return acumulado
 
 # =====================================================================
-# 3. GENERADOR FORENSE WORD (.DOCX)
+# GENERADOR WORD FORENSE (.DOCX)
 # =====================================================================
 def exportar_memorial_docx(texto_md: str, ruta_salida: str):
     doc = Document()
@@ -335,7 +363,7 @@ def exportar_memorial_docx(texto_md: str, ruta_salida: str):
     doc.save(ruta_salida)
 
 # =====================================================================
-# 4. ESPECIALISTAS Y CLASIFICADOR
+# AGENTES Y DICTAMEN INTEGRAL
 # =====================================================================
 MATERIAS_CONFIG = {
     "Civil": "Civil y Comercial (Ley 439 y Código Civil). Cobros ejecutivos, contratos y obligaciones.",
@@ -357,25 +385,21 @@ def clasificar_materia(hechos: str, cliente_ia, modelo: str) -> str:
     except Exception:
         return "Civil"
 
-
 def ejecutar_dictamen_integral(hechos: str, scp: dict, docs: str, materia: str, cliente_ia, modelo: str) -> str:
-    # FILTRO ANTI-ALUCINACION ESTRICTO
     if len(docs.strip()) < 80 and ("escaneado" in docs.lower() or not docs.strip()):
         return """# ⚠️ ERROR DE LECTURA DOCUMENTAL
-No se pudo extraer texto legible del documento adjunto (OCR inactivo o documento no legible).
-Por norma de seguridad jurídica, **Bol-Lex tiene prohibido redactar dictámenes o asumir montos/partes cuando no existe lectura fehaciente del expediente**.
-
-**Acción requerida:**
-1. Verifique que el indicador lateral muestre `Motor OCR: RapidOCR ONNX Activo`.
-2. Si el archivo es un escaneo muy comprimido, suba una versión con mayor nitidez o pegue el extracto en el campo de texto.
+No se pudo extraer texto legible del documento adjunto (OCR inactivo o documento ilegible).
+Por norma de seguridad procesal, **Bol-Lex tiene prohibido redactar dictámenes o inventar montos cuando no existe texto fehaciente**.
 """
 
     prompt_sistema = f"""
 Actúas como Consultor Jurídico Senior en Bolivia en materia {MATERIAS_CONFIG.get(materia, MATERIAS_CONFIG['Civil'])}.
 Elabora un dictamen CONTUNDENTE, TÉCNICO y APEGADO A LAS CLÁUSULAS REALES del expediente.
-REGLAS: Cero alucinaciones, indica montos y fechas reales identificados en la documentación.
+REGLAS ESTRICTAS:
+- Cero alucinaciones: extrae partes, juzgados, montos y fechas reales del expediente.
+- Si un punto no figura en la prueba documental, consigna expresamente 'No acreditado en obrados'.
 """
-    prompt_usuario = f"CASO:\n{hechos}\n\nDOCUMENTACIÓN REVISADA:\n{docs}\n\nJURISPRUDENCIA:\n{scp.get('ratio_decidendi', '')}"
+    prompt_usuario = f"CASO:\n{hechos}\n\nDOCUMENTACIÓN APORTADA:\n{docs}\n\nJURISPRUDENCIA:\n{scp.get('ratio_decidendi', '')}"
     res = cliente_ia.chat.completions.create(
         model=modelo,
         messages=[{"role": "system", "content": prompt_sistema}, {"role": "user", "content": prompt_usuario}],
@@ -386,7 +410,7 @@ REGLAS: Cero alucinaciones, indica montos y fechas reales identificados en la do
 def redactar_memorial_forense(hechos: str, docs: str, borrador_usuario: str, materia: str, abogado: str, cliente_ia, modelo: str) -> str:
     prompt_sistema = f"""
 Actúas como el Abogado Litigante patrocinante ({abogado}) en Bolivia.
-Redacta un MEMORIAL FORENSE COMPLETO reglamentario (Suma, Autoridad, Generales, Hechos, Derecho, Petitorio, Otrosíes).
+Redacta un MEMORIAL FORENSE COMPLETO reglamentario boliviano (Suma, Autoridad Judicial, Generales, Hechos, Fundamento de Derecho, Petitorio, Otrosíes).
 Materia: {materia}.
 """
     prompt_usuario = f"INSTRUCCIONES:\n{hechos}\n\nEXPEDIENTE:\n{docs}\n\nBORRADOR PREVIO:\n{borrador_usuario if borrador_usuario else 'Memorial íntegro.'}"
@@ -428,7 +452,7 @@ EXPEDIENTES ACTIVOS EN EL BUFETE:
     return res.choices[0].message.content
 
 # =====================================================================
-# 5. INTERFAZ GRÁFICA STREAMLIT
+# INTERFAZ STREAMLIT
 # =====================================================================
 st.title("⚖️ Bol-Lex AI: Bufete Digital Litigante")
 
@@ -461,7 +485,7 @@ with st.sidebar:
                 if st.session_state.memorial_actual:
                     ruta_mem = os.path.join(st.session_state.carpeta_actual, f"Memorial_{st.session_state.codigo_caso_actual}.docx")
                     exportar_memorial_docx(st.session_state.memorial_actual, ruta_mem)
-                st.toast("✅ Expediente y título guardados.")
+                st.toast("✅ Expediente y metadatos guardados.")
                 st.rerun()
             else:
                 st.toast("⚠️ No hay expediente activo.")
@@ -496,26 +520,35 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📁 Archivos del Caso Activo")
     archivos_adjuntos = st.file_uploader(
-        "Subir demandas o descargos (.pdf, .txt, .docx)",
-        type=["pdf", "txt", "docx"],
+        "Subir PDF, Word (.docx), TXT o comprimidos (.ZIP)",
+        type=["pdf", "txt", "docx", "zip"],
         accept_multiple_files=True
     )
     
+    # ENLACE GOOGLE DRIVE
+    url_gdrive = st.text_input("🔗 O pegar enlace de Google Drive:")
+    if url_gdrive and st.button("📥 Importar desde Drive", use_container_width=True):
+        cod_caso = st.session_state.codigo_caso_actual or f"BOLLEX-{datetime.now().strftime('%Y%m%d-%H%M')}"
+        ruta_dest = os.path.join("Expedientes", cod_caso)
+        os.makedirs(ruta_dest, exist_ok=True)
+        st.session_state.carpeta_actual = ruta_dest
+        st.session_state.codigo_caso_actual = cod_caso
+        
+        with st.spinner("Descargando desde Google Drive..."):
+            if descargar_desde_gdrive(url_gdrive, ruta_dest):
+                st.session_state.evidencia_acumulada = sincronizar_carpeta_caso(ruta_dest)
+                st.toast("✅ Archivos de Drive importados con éxito.")
+                st.rerun()
+
     if st.session_state.carpeta_actual and os.path.exists(st.session_state.carpeta_actual):
         st.markdown(f"**Expediente:** `{st.session_state.codigo_caso_actual}`")
-        if st.button("📂 Abrir Carpeta en Windows", use_container_width=True):
-            try:
-                os.startfile(os.path.realpath(st.session_state.carpeta_actual))
-            except Exception:
-                subprocess.Popen(["explorer", os.path.realpath(st.session_state.carpeta_actual)])
-        
         if st.button("🔄 Sincronizar archivos", use_container_width=True):
             st.session_state.evidencia_acumulada = sincronizar_carpeta_caso(st.session_state.carpeta_actual)
             st.toast("Archivos sincronizados.")
 
-        st.caption("Archivos en este expediente:")
+        st.caption("Documentos en este expediente:")
         for f in os.listdir(st.session_state.carpeta_actual):
-            if not f.endswith(".ocr_cache.txt"):
+            if not f.endswith((".ocr_cache.txt", "meta.json")):
                 st.text(f"• {f}")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📋 Dictamen y Diagnóstico", "📝 Redactor de Memorial (Word / PDF)", "💬 Consultorio Jurídico y Relación Intercasos", "🗄️ Archivo Documental"])
@@ -539,55 +572,55 @@ with tab1:
     caso_cliente = st.text_area(
         "✍️ Planteamiento del caso e instrucciones para el bufete:",
         value="" if not st.session_state.dictamen_actual else "Revisa los antecedentes del caso adjunto y establece estrategia jurídica y acciones procesales.",
-        placeholder="Describe aquí el nuevo caso, partes involucradas, montos y fechas...",
+        placeholder="Describe aquí el caso o las instrucciones específicas...",
         height=90
     )
 
     if st.button("🚀 Analizar Caso y Generar Dictamen Estratégico", type="primary"):
-        if len(caso_cliente.strip()) < 8:
-            st.warning("⚠️ Ingresa una breve instrucción o descripción del caso.")
-        else:
-            codigo_caso = st.session_state.codigo_caso_actual or f"BOLLEX-{datetime.now().strftime('%Y%m%d-%H%M')}"
-            ruta_carpeta = os.path.join("Expedientes", codigo_caso)
-            os.makedirs(ruta_carpeta, exist_ok=True)
-            st.session_state.carpeta_actual = ruta_carpeta
-            st.session_state.codigo_caso_actual = codigo_caso
+        codigo_caso = st.session_state.codigo_caso_actual or f"BOLLEX-{datetime.now().strftime('%Y%m%d-%H%M')}"
+        ruta_carpeta = os.path.join("Expedientes", codigo_caso)
+        os.makedirs(ruta_carpeta, exist_ok=True)
+        st.session_state.carpeta_actual = ruta_carpeta
+        st.session_state.codigo_caso_actual = codigo_caso
 
-            guardar_metadatos_caso(
-                ruta_carpeta,
-                st.session_state.titulo_caso_actual or codigo_caso,
-                codigo_caso,
-                st.session_state.materia_detectada
-            )
+        guardar_metadatos_caso(
+            ruta_carpeta,
+            st.session_state.titulo_caso_actual or codigo_caso,
+            codigo_caso,
+            st.session_state.materia_detectada
+        )
 
-            if archivos_adjuntos:
-                for arch in archivos_adjuntos:
+        if archivos_adjuntos:
+            for arch in archivos_adjuntos:
+                if arch.name.lower().endswith(".zip"):
+                    descomprimir_zip(arch, ruta_carpeta)
+                else:
                     ruta_arch = os.path.join(ruta_carpeta, arch.name)
                     with open(ruta_arch, "wb") as f:
                         f.write(arch.getbuffer())
 
-            docs_texto = sincronizar_carpeta_caso(ruta_carpeta)
-            st.session_state.evidencia_acumulada = docs_texto
+        docs_texto = sincronizar_carpeta_caso(ruta_carpeta)
+        st.session_state.evidencia_acumulada = docs_texto
 
-            with st.spinner("Procesando evidencia y redactando dictamen..."):
-                try:
-                    materia = clasificar_materia(caso_cliente + "\n" + docs_texto[:800], cliente_groq, modelo_activo)
-                    st.session_state.materia_detectada = materia
-                    scp = motor_rag.buscar(caso_cliente)
-                    
-                    dictamen = ejecutar_dictamen_integral(caso_cliente, scp, docs_texto[:9000], materia, cliente_groq, modelo_activo)
-                    st.session_state.dictamen_actual = dictamen
+        with st.spinner("Procesando evidencia documental y redactando dictamen..."):
+            try:
+                materia = clasificar_materia(caso_cliente + "\n" + docs_texto[:800], cliente_groq, modelo_activo)
+                st.session_state.materia_detectada = materia
+                scp = motor_rag.buscar(caso_cliente)
+                
+                dictamen = ejecutar_dictamen_integral(caso_cliente, scp, docs_texto[:9000], materia, cliente_groq, modelo_activo)
+                st.session_state.dictamen_actual = dictamen
 
-                    with open(os.path.join(ruta_carpeta, f"Dictamen_{codigo_caso}.md"), "w", encoding="utf-8") as f:
-                        f.write(dictamen)
+                with open(os.path.join(ruta_carpeta, f"Dictamen_{codigo_caso}.md"), "w", encoding="utf-8") as f:
+                    f.write(dictamen)
 
-                    pdf = MarkdownPdf(toc_level=0)
-                    pdf.add_section(Section(dictamen))
-                    pdf.save(os.path.join(ruta_carpeta, f"Dictamen_{codigo_caso}.pdf"))
-                    st.success("✅ Dictamen procesado y guardado.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error en procesamiento: {e}")
+                pdf = MarkdownPdf(toc_level=0)
+                pdf.add_section(Section(dictamen))
+                pdf.save(os.path.join(ruta_carpeta, f"Dictamen_{codigo_caso}.pdf"))
+                st.success("✅ Dictamen procesado y guardado.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error en procesamiento: {e}")
 
     if st.session_state.dictamen_actual:
         st.divider()
@@ -664,7 +697,7 @@ with tab3:
     
     st.markdown("#### 🔗 Informe del Agente Director: Relación y Conexidad Global")
     if st.button("🌐 Analizar Relación de Todos los Casos del Bufete", type="secondary"):
-        with st.spinner("El Agente Director está cruzando información de todos los expedientes..."):
+        with st.spinner("El Agente Director está analizando conexidad entre todos los expedientes..."):
             try:
                 informe_cruzado = relacionar_todos_los_casos(cliente_groq, modelo_activo)
                 st.markdown(informe_cruzado)

@@ -11,3 +11,4 @@ rapidocr-onnxruntime
 pypdfium2
 numpy
 pillow
+gdown

@@ -17,12 +17,12 @@ from groq import Groq
 from markdown_pdf import MarkdownPdf, Section
 import gdown
 
-# Restringir consumo de CPU
+# Control de hilos en CPU
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 
 # =====================================================================
-# CONFIGURACIÓN DE OCR NATIVO
+# MOTOR OCR NATIVO
 # =====================================================================
 OCR_DISPONIBLE = False
 try:
@@ -139,7 +139,7 @@ def eliminar_expediente_actual(codigo_caso: str):
     reiniciar_caso()
 
 # =====================================================================
-# GESTIÓN DE ARCHIVOS ZIP Y GOOGLE DRIVE
+# GESTIÓN ZIP Y GOOGLE DRIVE
 # =====================================================================
 def descomprimir_zip(buffer_o_ruta, carpeta_destino: str):
     with zipfile.ZipFile(buffer_o_ruta, 'r') as zip_ref:
@@ -213,13 +213,8 @@ def cargar_motor():
 def obtener_modelo_ia():
     api_key = os.environ.get("GROQ_API_KEY", "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")
     cliente = Groq(api_key=api_key)
-    try:
-        lista = cliente.models.list()
-        activos = [m.id for m in lista.data if not any(k in m.id.lower() for k in ["guard", "whisper", "orpheus", "prompt"])]
-        prioritarios = [m for m in activos if any(k in m.lower() for k in ["llama", "compound", "mixtral", "gemma"])]
-        modelo_elegido = prioritarios[0] if prioritarios else activos[0]
-    except Exception:
-        modelo_elegido = "llama-3.3-70b-versatile"
+    # Fijación estricta al modelo más potente y confiable
+    modelo_elegido = "llama-3.3-70b-versatile"
     return cliente, modelo_elegido
 
 # =====================================================================
@@ -256,7 +251,7 @@ def extraer_texto_archivo(ruta_o_buffer, nombre: str, carpeta_caso: str = None) 
                 return texto_digital
 
             if OCR_DISPONIBLE:
-                st.toast(f"🔍 OCR activado en: {nombre}...")
+                st.toast(f"🔍 OCR en: {nombre}...")
                 if isinstance(ruta_o_buffer, str):
                     doc_pdf = pdfium.PdfDocument(ruta_o_buffer)
                 else:
@@ -284,7 +279,7 @@ def extraer_texto_archivo(ruta_o_buffer, nombre: str, carpeta_caso: str = None) 
                             fc.write(resultado_final)
                     return resultado_final
             
-            return f"[Archivo escaneado {nombre}: no se detectó texto directo]."
+            return f"[Archivo escaneado {nombre}: texto ilegible o sin OCR]."
         return ""
     except Exception as e:
         return f"Error procesando {nombre}: {e}"
@@ -296,14 +291,76 @@ def sincronizar_carpeta_caso(ruta_carpeta: str) -> str:
             a for a in os.listdir(ruta_carpeta) 
             if a.endswith((".pdf", ".txt", ".docx")) 
             and not a.startswith(("Dictamen_", "Memorial_"))
-            and not a.endswith(".ocr_cache.txt")
+            and not a.endswith((".ocr_cache.txt", ".resumen.json"))
         ]
         for arch in archivos:
             ruta_completa = os.path.join(ruta_carpeta, arch)
             texto = extraer_texto_archivo(ruta_completa, arch, carpeta_caso=ruta_carpeta)
-            extracto = texto[:3000].strip()
-            acumulado += f"\n--- DOCUMENTO: {arch} ---\n{extracto}\n"
+            acumulado += f"\n--- DOCUMENTO: {arch} ---\n{texto[:3500].strip()}\n"
     return acumulado
+
+# =====================================================================
+# ANÁLISIS DOCUMENTAL JERÁRQUICO (MAP-REDUCE ANTI-ALUCINACIÓN)
+# =====================================================================
+def resumir_documento_individual(nombre_archivo: str, texto: str, cliente_ia, modelo: str, carpeta_caso: str) -> dict:
+    """Extrae hechos probados, fechas, montos y partes de cada documento para evitar saturar el LLM."""
+    ruta_resumen = os.path.join(carpeta_caso, f"{nombre_archivo}.resumen.json")
+    if os.path.exists(ruta_resumen):
+        try:
+            with open(ruta_resumen, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    prompt_extract = f"""
+Analiza este documento del expediente boliviano de manera estricta y extrae solo hechos comprobados:
+DOCUMENTO: {nombre_archivo}
+CONTENIDO:
+{texto[:5000]}
+
+Responde en formato de texto breve:
+1. Tipo de documento y fecha:
+2. Partes identificadas (Nombres / Entidades exactas):
+3. Objeto principal o contrato referenciado:
+4. Montos económicos específicos (si existen, con moneda exacta):
+5. Estado o situación de cumplimiento/deuda:
+REGLA: Si un dato no figura en el texto, escribe 'No especificado'. NO asumas ni inventes nada.
+"""
+    try:
+        res = cliente_ia.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "user", "content": prompt_extract}],
+            temperature=0.0
+        )
+        resumen = res.choices[0].message.content.strip()
+        datos = {"archivo": nombre_archivo, "sintesis": resumen}
+        with open(ruta_resumen, "w", encoding="utf-8") as f:
+            json.dump(datos, f, ensure_ascii=False, indent=2)
+        return datos
+    except Exception:
+        return {"archivo": nombre_archivo, "sintesis": texto[:500]}
+
+def construir_expediente_estructurado(carpeta_caso: str, cliente_ia, modelo: str) -> str:
+    """Consolida la síntesis de todos los documentos del expediente."""
+    if not os.path.exists(carpeta_caso):
+        return ""
+    archivos = [
+        a for a in os.listdir(carpeta_caso) 
+        if a.endswith((".pdf", ".txt", ".docx")) 
+        and not a.startswith(("Dictamen_", "Memorial_"))
+        and not a.endswith((".ocr_cache.txt", ".resumen.json"))
+    ]
+    if not archivos:
+        return ""
+    
+    informe_consolidado = []
+    for arch in archivos:
+        ruta_arch = os.path.join(carpeta_caso, arch)
+        texto = extraer_texto_archivo(ruta_arch, arch, carpeta_caso=carpeta_caso)
+        sintesis = resumir_documento_individual(arch, texto, cliente_ia, modelo, carpeta_caso)
+        informe_consolidado.append(f"### [DOCUMENTO]: {arch}\n{sintesis.get('sintesis', '')}\n")
+        
+    return "\n".join(informe_consolidado)
 
 # =====================================================================
 # GENERADOR WORD FORENSE (.DOCX)
@@ -385,25 +442,32 @@ def clasificar_materia(hechos: str, cliente_ia, modelo: str) -> str:
     except Exception:
         return "Civil"
 
-def ejecutar_dictamen_integral(hechos: str, scp: dict, docs: str, materia: str, cliente_ia, modelo: str) -> str:
-    if len(docs.strip()) < 80 and ("escaneado" in docs.lower() or not docs.strip()):
+def ejecutar_dictamen_integral(hechos: str, scp: dict, docs_estructurados: str, materia: str, cliente_ia, modelo: str) -> str:
+    if len(docs_estructurados.strip()) < 50:
         return """# ⚠️ ERROR DE LECTURA DOCUMENTAL
-No se pudo extraer texto legible del documento adjunto (OCR inactivo o documento ilegible).
-Por norma de seguridad procesal, **Bol-Lex tiene prohibido redactar dictámenes o inventar montos cuando no existe texto fehaciente**.
+No se detectó contenido suficiente en el expediente activo. Verifique haber subido los archivos o haber presionado 'Importar desde Drive'.
 """
 
     prompt_sistema = f"""
 Actúas como Consultor Jurídico Senior en Bolivia en materia {MATERIAS_CONFIG.get(materia, MATERIAS_CONFIG['Civil'])}.
-Elabora un dictamen CONTUNDENTE, TÉCNICO y APEGADO A LAS CLÁUSULAS REALES del expediente.
-REGLAS ESTRICTAS:
-- Cero alucinaciones: extrae partes, juzgados, montos y fechas reales del expediente.
-- Si un punto no figura en la prueba documental, consigna expresamente 'No acreditado en obrados'.
+Elabora un dictamen CONTUNDENTE, TÉCNICO y APEGADO ESTRICTAMENTE A LOS HECHOS PROBADOS del expediente.
+
+ESTRUCTURA OBLIGATORIA:
+1. IDENTIFICACIÓN DE LAS PARTES (Acreedor, deudor, garantes, personería jurídica).
+2. ANTECEDENTES Y RELACIÓN CONTRACTUAL (Detalle cronológico de contratos, adendas, notas y cartas notariales).
+3. DETERMINACIÓN DE LA OBLIGACIÓN ECONÓMICA (Montos reales devengados, pagos acreditados y saldo impago exigible).
+4. VIABILIDAD PROCESAL Y ESTRATEGIA DE LITIGIO (Vía monitoria ejecutiva, proceso ordinario o excepciones).
+5. PLAN DE ACCIÓN INMEDIATO (Requerimientos, medidas precautorias y plazos procesales).
+
+REGLAS DE SEGURIDAD JURÍDICA:
+- Queda terminantemente prohibido asumir o inventar que una deuda fue pagada si no existe un recibo bancario o comprobante expreso en los antecedentes.
+- Consigna las fechas y números de contrato exactamente como constan en la documentación.
 """
-    prompt_usuario = f"CASO:\n{hechos}\n\nDOCUMENTACIÓN APORTADA:\n{docs}\n\nJURISPRUDENCIA:\n{scp.get('ratio_decidendi', '')}"
+    prompt_usuario = f"INSTRUCCIONES DEL CLIENTE:\n{hechos}\n\nEXPEDIENTE DOCUMENTADO:\n{docs_estructurados}\n\nJURISPRUDENCIA:\n{scp.get('ratio_decidendi', '')}"
     res = cliente_ia.chat.completions.create(
         model=modelo,
         messages=[{"role": "system", "content": prompt_sistema}, {"role": "user", "content": prompt_usuario}],
-        temperature=0.1
+        temperature=0.05
     )
     return res.choices[0].message.content
 
@@ -417,7 +481,7 @@ Materia: {materia}.
     res = cliente_ia.chat.completions.create(
         model=modelo,
         messages=[{"role": "system", "content": prompt_sistema}, {"role": "user", "content": prompt_usuario}],
-        temperature=0.15
+        temperature=0.1
     )
     return res.choices[0].message.content
 
@@ -525,7 +589,6 @@ with st.sidebar:
         accept_multiple_files=True
     )
     
-    # ENLACE GOOGLE DRIVE
     url_gdrive = st.text_input("🔗 O pegar enlace de Google Drive:")
     if url_gdrive and st.button("📥 Importar desde Drive", use_container_width=True):
         cod_caso = st.session_state.codigo_caso_actual or f"BOLLEX-{datetime.now().strftime('%Y%m%d-%H%M')}"
@@ -548,7 +611,7 @@ with st.sidebar:
 
         st.caption("Documentos en este expediente:")
         for f in os.listdir(st.session_state.carpeta_actual):
-            if not f.endswith((".ocr_cache.txt", "meta.json")):
+            if not f.endswith((".ocr_cache.txt", ".resumen.json", "meta.json")):
                 st.text(f"• {f}")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📋 Dictamen y Diagnóstico", "📝 Redactor de Memorial (Word / PDF)", "💬 Consultorio Jurídico y Relación Intercasos", "🗄️ Archivo Documental"])
@@ -599,16 +662,19 @@ with tab1:
                     with open(ruta_arch, "wb") as f:
                         f.write(arch.getbuffer())
 
-        docs_texto = sincronizar_carpeta_caso(ruta_carpeta)
-        st.session_state.evidencia_acumulada = docs_texto
-
-        with st.spinner("Procesando evidencia documental y redactando dictamen..."):
+        with st.spinner("Procesando y jerarquizando documentos del expediente..."):
             try:
-                materia = clasificar_materia(caso_cliente + "\n" + docs_texto[:800], cliente_groq, modelo_activo)
+                # Paso 1: Jerarquizar cada archivo individualmente (Map-Reduce)
+                docs_jerarquizados = construir_expediente_estructurado(ruta_carpeta, cliente_groq, modelo_activo)
+                st.session_state.evidencia_acumulada = docs_jerarquizados
+
+                # Paso 2: Clasificar materia y buscar jurisprudencia
+                materia = clasificar_materia(caso_cliente + "\n" + docs_jerarquizados[:1000], cliente_groq, modelo_activo)
                 st.session_state.materia_detectada = materia
                 scp = motor_rag.buscar(caso_cliente)
                 
-                dictamen = ejecutar_dictamen_integral(caso_cliente, scp, docs_texto[:9000], materia, cliente_groq, modelo_activo)
+                # Paso 3: Generar dictamen fundamentado
+                dictamen = ejecutar_dictamen_integral(caso_cliente, scp, docs_jerarquizados, materia, cliente_groq, modelo_activo)
                 st.session_state.dictamen_actual = dictamen
 
                 with open(os.path.join(ruta_carpeta, f"Dictamen_{codigo_caso}.md"), "w", encoding="utf-8") as f:
@@ -736,7 +802,7 @@ with tab4:
     if not st.session_state.carpeta_actual or not os.path.exists(st.session_state.carpeta_actual):
         st.info("No hay un expediente activo cargado.")
     else:
-        archivos_disco = [f for f in os.listdir(st.session_state.carpeta_actual) if not f.endswith((".ocr_cache.txt", "meta.json"))]
+        archivos_disco = [f for f in os.listdir(st.session_state.carpeta_actual) if not f.endswith((".ocr_cache.txt", ".resumen.json", "meta.json"))]
         
         col_d1, col_d2 = st.columns(2)
         with col_d1:

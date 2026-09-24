@@ -2,9 +2,11 @@
 pypdf
 python-docx
 markdown-pdf
+torchvision
 sentence-transformers
 scikit-learn
 groq
+opencv-python-headless
 rapidocr-onnxruntime
 pypdfium2
 numpy

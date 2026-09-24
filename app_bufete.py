@@ -188,7 +188,7 @@ def obtener_modelo_ia():
         prioritarios = [m for m in activos if any(k in m.lower() for k in ["llama", "compound", "mixtral", "gemma"])]
         modelo_elegido = prioritarios[0] if prioritarios else activos[0]
     except Exception:
-        modelo_elegido = "llama-3.1-8b-instant"
+        modelo_elegido = "llama-3.3-70b-versatile"
     return cliente, modelo_elegido
 
 # =====================================================================
@@ -357,7 +357,19 @@ def clasificar_materia(hechos: str, cliente_ia, modelo: str) -> str:
     except Exception:
         return "Civil"
 
+
 def ejecutar_dictamen_integral(hechos: str, scp: dict, docs: str, materia: str, cliente_ia, modelo: str) -> str:
+    # FILTRO ANTI-ALUCINACION ESTRICTO
+    if len(docs.strip()) < 80 and ("escaneado" in docs.lower() or not docs.strip()):
+        return """# ⚠️ ERROR DE LECTURA DOCUMENTAL
+No se pudo extraer texto legible del documento adjunto (OCR inactivo o documento no legible).
+Por norma de seguridad jurídica, **Bol-Lex tiene prohibido redactar dictámenes o asumir montos/partes cuando no existe lectura fehaciente del expediente**.
+
+**Acción requerida:**
+1. Verifique que el indicador lateral muestre `Motor OCR: RapidOCR ONNX Activo`.
+2. Si el archivo es un escaneo muy comprimido, suba una versión con mayor nitidez o pegue el extracto en el campo de texto.
+"""
+
     prompt_sistema = f"""
 Actúas como Consultor Jurídico Senior en Bolivia en materia {MATERIAS_CONFIG.get(materia, MATERIAS_CONFIG['Civil'])}.
 Elabora un dictamen CONTUNDENTE, TÉCNICO y APEGADO A LAS CLÁUSULAS REALES del expediente.

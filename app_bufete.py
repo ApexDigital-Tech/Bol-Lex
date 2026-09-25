@@ -213,8 +213,33 @@ def cargar_motor():
 def obtener_modelo_ia():
     api_key = os.environ.get("GROQ_API_KEY", "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")
     cliente = Groq(api_key=api_key)
-    # Fijación estricta al modelo más potente y confiable
-    modelo_elegido = "llama-3.3-70b-versatile"
+    try:
+        modelos = cliente.models.list()
+        ids = [m.id for m in modelos.data]
+        
+        # Prioridad de modelos de alto rendimiento para razonamiento jurídico
+        preferidos = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama3-70b-8192",
+            "mixtral-8x7b-32768",
+            "llama-3.1-8b-instant"
+        ]
+        
+        modelo_elegido = None
+        for pref in preferidos:
+            if pref in ids:
+                modelo_elegido = pref
+                break
+                
+        if not modelo_elegido:
+            # Seleccionar cualquier modelo Llama activo
+            candidatos = [m for m in ids if "llama" in m.lower() and not any(k in m.lower() for k in ["guard", "whisper"])]
+            modelo_elegido = candidatos[0] if candidatos else ids[0]
+            
+    except Exception:
+        modelo_elegido = "llama-3.1-70b-versatile"
+        
     return cliente, modelo_elegido
 
 # =====================================================================

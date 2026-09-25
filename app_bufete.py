@@ -214,25 +214,53 @@ def obtener_modelo_ia():
     api_key = os.environ.get("GROQ_API_KEY", "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")
     cliente = Groq(api_key=api_key)
     
-    # Lista prioritaria estricta de modelos de producción sin restricciones de términos
-    modelos_prioritarios = [
+    # 1. Obtener los IDs reales que devuelve la cuenta
+    ids_disponibles = []
+    try:
+        modelos = cliente.models.list()
+        ids_disponibles = [m.id for m in modelos.data if not any(k in m.id.lower() for k in ["guard", "whisper", "orpheus"])]
+    except Exception:
+        pass
+
+    # 2. Lista prioritaria de candidatos
+    candidatos_base = [
         "llama-3.3-70b-versatile",
+        "llama3-70b-8192",
         "llama-3.1-70b-versatile",
+        "mixtral-8x7b-32768",
         "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
+        "llama3-8b-8192",
+        "gemma2-9b-it",
+        "openai/gpt-oss-120b"
     ]
     
-    modelo_elegido = "llama-3.1-8b-instant"
-    try:
-        lista_activos = [m.id for m in cliente.models.list().data]
-        for candidato in modelos_prioritarios:
-            if candidato in lista_activos:
-                modelo_elegido = candidato
-                break
-    except Exception:
-        modelo_elegido = "llama-3.1-8b-instant"
-        
-    return cliente, modelo_elegido
+    # Unir candidatos sin duplicados, priorizando los que reporta la API
+    todos_candidatos = []
+    for cid in candidatos_base:
+        if cid in ids_disponibles and cid not in todos_candidatos:
+            todos_candidatos.append(cid)
+    for mid in ids_disponibles:
+        if mid not in todos_candidatos:
+            todos_candidatos.append(mid)
+    for cid in candidatos_base:
+        if cid not in todos_candidatos:
+            todos_candidatos.append(cid)
+
+    # 3. Prueba de fuego en caliente: testear cuál responde 200
+    modelo_operativo = "openai/gpt-oss-120b"
+    for candidato in todos_candidatos:
+        try:
+            test = cliente.chat.completions.create(
+                model=candidato,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=2
+            )
+            modelo_operativo = candidato
+            break
+        except Exception:
+            continue
+
+    return cliente, modelo_operativo
 
 # =====================================================================
 # EXTRACTOR DOCUMENTAL CON OCR

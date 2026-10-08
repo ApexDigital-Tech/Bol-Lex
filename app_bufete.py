@@ -211,7 +211,12 @@ def cargar_motor():
 
 @st.cache_resource
 def obtener_modelo_ia():
-    api_key = os.environ.get("GROQ_API_KEY", "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")
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        try:
+            api_key = st.secrets["GROQ_API_KEY"]
+        except Exception:
+            api_key = ""
     cliente = Groq(api_key=api_key)
     
     # 1. Obtener los IDs reales que devuelve la cuenta

@@ -42,3 +42,14 @@
 - **Elección Óptima de Agente/Modelo**:
   - `🌟 llama-3.3-70b-versatile`: Modelo principal recomendado (máxima calidad analítica y jurisprudencial).
   - `⚡ llama-3.1-8b-instant`: Modelo secundario recomendado (ultra rápido, latencia mínima).
+
+### 6. Homologación Exclusiva de Modelos Legales y Blindaje de Consultorio & Redactor
+- **Causa Raíz de Falla en Redactor y Consultorio**:
+  1. La auto-detección de Groq agregaba al catálogo modelos experimentales de la cuenta (`allam-2-7b`, un LLM en árabe de 4k tokens).
+  2. Al seleccionarse `allam-2-7b`, el Redactor Forense colapsaba con `context_length_exceeded` (4k tokens) y el Consultorio Litigante degeneraba en un bucle repetitivo infinito (*"de la fecha de la fecha de la fecha..."*).
+  3. En el Dictamen Jurídico, el análisis cronológico consumía los tokens antes de alcanzar las Secciones 4 y 5.
+- **Acciones Implementadas**:
+  1. **Lista Blanca Homologada**: `MODELOS_HOMOLOGADOS` restringe estrictamente el sistema a `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `llama-3.1-70b-versatile` y `mixtral-8x7b-32768`. Se prohíbe el uso o exposición de modelos no aptos para litigio.
+  2. **Penalización Anti-Bucle (`presence_penalty = 0.1`)**: Inyectado a nivel de motor LLM para erradicar cualquier degeneración repetitiva en el consultorio.
+  3. **Estructura Chat en Consultorio**: Separación formal en mensaje de sistema y usuario con contexto acotado (máx. 2,000 caracteres de dictamen y 2,000 de evidencias).
+  4. **Pauta de Integridad del Dictamen**: Regla mandatoria para sintetizar la Sección 2 en 4 hitos clave, garantizando que las Secciones 4 (Vías Procesales) y 5 (Medidas Cautelares y Plazos) concluyan de forma completa con `max_tokens=2000`.

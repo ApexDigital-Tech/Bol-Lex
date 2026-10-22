@@ -74,9 +74,10 @@ ESTRUCTURA OBLIGATORIA DEL DICTAMEN:
 - Medidas cautelares a solicitar (retención judicial de cuentas bancarias y bienes del deudor).
 - Plazos de prescripción e inmediatez.
 
-REGLA ANTI-ALUCINACIÓN:
+REGLA ANTI-ALUCINACIÓN Y DE COMPLETITUD:
 - Basa tus conclusiones ÚNICAMENTE en la evidencia probada provista.
 - Si una prueba no existe en la auditoría, indícala expresamente como 'Elemento pendiente de subsanar por el cliente'.
+- ES OBLIGATORIO CONCLUIR LAS 5 SECCIONES. Sintetiza la cronología en los 4 hitos determinantes y el cuadro de montos, para garantizar el desarrollo completo y exhaustivo de la Sección 4 (Vías Procesales) y Sección 5 (Medidas Cautelares y Plazos).
 """
 
         precedente_texto = f"""
@@ -94,14 +95,14 @@ INSTRUCCIONES Y REQUERIMIENTO DEL CLIENTE:
 {precedente_texto}
 
 INFORME FORENSE DE DOCUMENTOS Y HECHOS ACREDITADOS:
-{informe_auditoria_evidencia[:4500]}
+{informe_auditoria_evidencia[:3500]}
 """
         return self.llm.invocar(
             mensajes=[
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": prompt_usuario}
             ],
-            temperatura=0.05,
-            max_tokens=1800,
+            temperatura=0.08,
+            max_tokens=2000,
             auto_continuar=True
         )

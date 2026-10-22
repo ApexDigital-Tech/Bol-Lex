@@ -7,16 +7,12 @@ import time
 from typing import List, Dict, Any, Optional
 from groq import Groq
 
-# Modelos candidatos ordenados por capacidad de razonamiento jurídico y velocidad
-CANDIDATOS_PRIORITARIOS = [
+# Modelos homologados con ventana de 128k/32k y probada capacidad jurídica
+MODELOS_HOMOLOGADOS = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
     "llama-3.1-70b-versatile",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
     "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-    "qwen/qwen3.8-27b",
 ]
 
 class MotorLLM:
@@ -32,7 +28,7 @@ class MotorLLM:
                 
         self.api_key = api_key
         self.cliente = None
-        self.modelos_disponibles: List[str] = list(CANDIDATOS_PRIORITARIOS)
+        self.modelos_disponibles: List[str] = list(MODELOS_HOMOLOGADOS)
         self.modelo_activo: str = "llama-3.3-70b-versatile"
 
         if self.api_key:
@@ -53,32 +49,26 @@ class MotorLLM:
                 pass
 
     def _inicializar_modelos(self):
-        """Descubre los modelos activos de la cuenta y realiza una prueba en caliente."""
+        """Descubre los modelos homologados activos de la cuenta y realiza una prueba en caliente."""
         if not self.cliente:
             return
 
         ids_cuenta = []
         try:
             modelos = self.cliente.models.list()
-            ids_cuenta = [
-                m.id for m in modelos.data 
-                if not any(k in m.id.lower() for k in ["guard", "whisper", "orpheus", "vision"])
-            ]
+            ids_cuenta = [m.id for m in modelos.data]
         except Exception:
             pass
 
-        # Priorizar candidatos reconocidos que figuren en la cuenta
-        lista_ordenada = [c for c in CANDIDATOS_PRIORITARIOS if c in ids_cuenta]
-        for m in ids_cuenta:
-            if m not in lista_ordenada:
-                lista_ordenada.append(m)
-        for c in CANDIDATOS_PRIORITARIOS:
-            if c not in lista_ordenada:
-                lista_ordenada.append(c)
+        # Filtrar EXCLUSIVAMENTE los modelos homologados para evitar modelos experimentales (ej: allam, gemma)
+        lista_ordenada = [c for c in MODELOS_HOMOLOGADOS if c in ids_cuenta]
+        if not lista_ordenada:
+            lista_ordenada = list(MODELOS_HOMOLOGADOS)
 
         self.modelos_disponibles = lista_ordenada
+        self.modelo_activo = self.modelos_disponibles[0]
 
-        # Dry-run test en caliente
+        # Dry-run test en caliente con el primer modelo homologado
         for cand in self.modelos_disponibles:
             try:
                 self.cliente.chat.completions.create(
@@ -94,6 +84,9 @@ class MotorLLM:
     def cambiar_modelo(self, nuevo_modelo: str) -> bool:
         if nuevo_modelo in self.modelos_disponibles:
             self.modelo_activo = nuevo_modelo
+            return True
+        elif self.modelos_disponibles:
+            self.modelo_activo = self.modelos_disponibles[0]
             return True
         return False
 
@@ -197,7 +190,8 @@ class MotorLLM:
                     "model": mod,
                     "messages": mensajes_mod,
                     "temperature": temperatura,
-                    "max_tokens": tokens_mod
+                    "max_tokens": tokens_mod,
+                    "presence_penalty": 0.1
                 }
                 if json_mode:
                     params["response_format"] = {"type": "json_object"}

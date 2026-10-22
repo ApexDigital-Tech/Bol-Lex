@@ -125,24 +125,24 @@ with st.sidebar:
             st.rerun()
     else:
         st.success(f"🤖 IA Activa: `{orquestador.motor_llm.modelo_activo}`")
-        # Selector de modelos
+        # Selector de modelos homologados
         modelos_opt = orquestador.motor_llm.modelos_disponibles
-        idx_actual = modelos_opt.index(orquestador.motor_llm.modelo_activo) if orquestador.motor_llm.modelo_activo in modelos_opt else 0
+        if orquestador.motor_llm.modelo_activo not in modelos_opt:
+            orquestador.motor_llm.modelo_activo = modelos_opt[0]
+        idx_actual = modelos_opt.index(orquestador.motor_llm.modelo_activo)
 
         def formatear_modelo(m: str) -> str:
             if "3.3" in m:
-                return f"🌟 {m} (Recomendado - 128k Máxima Calidad)"
+                return f"🌟 {m} (Recomendado - 128k Máxima Capacidad)"
             if "3.1-8b" in m:
                 return f"⚡ {m} (Ultra Rápido - 128k)"
             if "3.1-70b" in m:
                 return f"💎 {m} (Avanzado - 128k)"
             if "mixtral" in m:
                 return f"🚀 {m} (32k)"
-            if any(k in m for k in ["8192", "gemma", "qwen"]):
-                return f"⚠️ {m} (8k - No recomendado para expedientes)"
             return m
 
-        mod_elegido = st.selectbox("Cambiar Modelo Groq:", options=modelos_opt, index=idx_actual, format_func=formatear_modelo)
+        mod_elegido = st.selectbox("Modelo de Inferencia:", options=modelos_opt, index=idx_actual, format_func=formatear_modelo)
         if mod_elegido != orquestador.motor_llm.modelo_activo:
             orquestador.motor_llm.cambiar_modelo(mod_elegido)
             st.rerun()
@@ -460,24 +460,33 @@ with tab4:
         with st.chat_message("user"):
             st.write(consulta)
 
-        prompt_chat = f"""
+        prompt_sistema = """
 Actúas como Consultor Jurídico Litigante Senior en Bolivia.
-Dictamen emitido para este caso:
-{st.session_state.dictamen_actual[:2500]}
+Tu función es responder con máxima solvencia procesal las dudas y requerimientos de estrategia legal formulados por el abogado litigante.
+REGLAS MANDATORIAS:
+- Fundamenta tus criterios en normas bolivianas vigentes (Ley 439 Código Procesal Civil, Ley 254 CPCo, Ley 1178 SAFCO, Ley 2341 LPA, D.S. 0181).
+- Basa tu análisis exclusivamente en los antecedentes probados del expediente y el dictamen jurídico emitido.
+- Prohibido repetir palabras o frases en bucle. Responde con redacción fluida, técnica y contundente.
+"""
+        contexto_caso = ""
+        if st.session_state.dictamen_actual:
+            contexto_caso += f"DICTAMEN ESTRATÉGICO:\n{st.session_state.dictamen_actual[:2000]}\n\n"
+        if st.session_state.evidencia_acumulada:
+            contexto_caso += f"EVIDENCIAS AUDITADAS:\n{st.session_state.evidencia_acumulada[:2000]}\n\n"
 
-Evidencias documentadas probadas:
-{st.session_state.evidencia_acumulada[:5000]}
-
-Pregunta del abogado:
+        prompt_usuario = f"""{contexto_caso}CONSULTA O REQUERIMIENTO DEL ABOGADO LITIGANTE:
 {consulta}
-
-REGLA: Responde con rigor procesal boliviano (artículos de leyes, excepciones, plazos). No inventes hechos no respaldados en las evidencias.
 """
         with st.spinner("Consultando con el equipo de especialistas..."):
             try:
                 resp_llm = orquestador.motor_llm.invocar(
-                    mensajes=[{"role": "user", "content": prompt_chat}],
-                    temperatura=0.1
+                    mensajes=[
+                        {"role": "system", "content": prompt_sistema},
+                        {"role": "user", "content": prompt_usuario}
+                    ],
+                    temperatura=0.15,
+                    max_tokens=1400,
+                    auto_continuar=False
                 )
                 with st.chat_message("assistant"):
                     st.markdown(resp_llm)

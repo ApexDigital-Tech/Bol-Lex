@@ -75,7 +75,9 @@ HECHOS Y EVIDENCIAS PROBADAS EN EL EXPEDIENTE:
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": prompt_usuario}
             ],
-            temperatura=0.08
+            temperatura=0.08,
+            max_tokens=4096,
+            auto_continuar=True
         )
 
     @staticmethod

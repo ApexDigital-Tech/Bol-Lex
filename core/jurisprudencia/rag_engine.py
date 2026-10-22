@@ -4,6 +4,7 @@ Impide terminantemente la inyección de precedentes de ramas ajenas a la controv
 """
 from typing import Dict, Any, List, Optional
 import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from .corpus_data import CORPUS_JURISPRUDENCIA_BOLIVIA
@@ -13,20 +14,6 @@ class MotorRAGJurisprudencial:
     def __init__(self):
         self.corpus = CORPUS_JURISPRUDENCIA_BOLIVIA
         self.scraper = ScraperTCP()
-        self.encoder = None
-        self.vectores_corpus = None
-        self._inicializar_encoder()
-
-    def _inicializar_encoder(self):
-        """Carga perezosa del modelo de embeddings."""
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.encoder = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-            textos = [f"{d['materia']} {d['tema']} {d['ratio_decidendi']}" for d in self.corpus]
-            self.vectores_corpus = self.encoder.encode(textos)
-        except Exception:
-            self.encoder = None
-            self.vectores_corpus = None
 
     def buscar_precedente_pertinente(self, hechos_o_consulta: str, materia_caso: str) -> Dict[str, Any]:
         """
@@ -60,19 +47,23 @@ class MotorRAGJurisprudencial:
                 "normas_clave": []
             }
 
-        # 2. Búsqueda semántica dentro del subconjunto de la materia
-        if self.encoder is not None:
-            try:
-                v_q = self.encoder.encode([hechos_o_consulta])
-                textos_filtrados = [f"{d['tema']} {d['ratio_decidendi']}" for d in docs_materia]
-                vectores_filtrados = self.encoder.encode(textos_filtrados)
-                sims = cosine_similarity(v_q, vectores_filtrados)[0]
+        # 2. Búsqueda vectorial semántica TF-IDF (100% local, n-gramas, cero latencia de red)
+        try:
+            textos_filtrados = [
+                f"{d['materia']} {d['tema']} {d['ratio_decidendi']} {' '.join(d.get('normas_clave', []))} {' '.join(d.get('descriptores', []))}" 
+                for d in docs_materia
+            ]
+            vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
+            tfidf_mat = vectorizer.fit_transform(textos_filtrados)
+            v_q = vectorizer.transform([hechos_o_consulta])
+            sims = cosine_similarity(v_q, tfidf_mat)[0]
+            if np.max(sims) > 0.02:
                 idx_mejor = int(np.argmax(sims))
                 res = docs_materia[idx_mejor].copy()
                 res["similitud_score"] = float(sims[idx_mejor])
                 return res
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # 3. Fallback léxico dentro de la materia filtrada
         coincidencias = self.scraper.buscar_local(hechos_o_consulta, materia=materia_caso, limite=1)

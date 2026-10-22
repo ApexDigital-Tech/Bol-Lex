@@ -118,15 +118,20 @@ with st.sidebar:
     st.title("⚖️ Bol-Lex AI")
     st.caption("Plataforma Agéntica Especializada de Litigio en Bolivia")
     
-    st.success(f"🤖 IA Activa: `{orquestador.motor_llm.modelo_activo}`")
-    
-    # Selector de modelos
-    modelos_opt = orquestador.motor_llm.modelos_disponibles
-    idx_actual = modelos_opt.index(orquestador.motor_llm.modelo_activo) if orquestador.motor_llm.modelo_activo in modelos_opt else 0
-    mod_elegido = st.selectbox("Cambiar Modelo Groq:", options=modelos_opt, index=idx_actual)
-    if mod_elegido != orquestador.motor_llm.modelo_activo:
-        orquestador.motor_llm.cambiar_modelo(mod_elegido)
-        st.rerun()
+    if not orquestador.motor_llm.api_key:
+        api_in = st.text_input("🔑 Ingrese Groq API Key:", type="password", placeholder="gsk_...")
+        if api_in:
+            orquestador.motor_llm.actualizar_api_key(api_in)
+            st.rerun()
+    else:
+        st.success(f"🤖 IA Activa: `{orquestador.motor_llm.modelo_activo}`")
+        # Selector de modelos
+        modelos_opt = orquestador.motor_llm.modelos_disponibles
+        idx_actual = modelos_opt.index(orquestador.motor_llm.modelo_activo) if orquestador.motor_llm.modelo_activo in modelos_opt else 0
+        mod_elegido = st.selectbox("Cambiar Modelo Groq:", options=modelos_opt, index=idx_actual)
+        if mod_elegido != orquestador.motor_llm.modelo_activo:
+            orquestador.motor_llm.cambiar_modelo(mod_elegido)
+            st.rerun()
 
     st.markdown("---")
     st.subheader("⚡ Gestión del Caso")

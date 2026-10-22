@@ -21,3 +21,10 @@
   - `forensic_writer.py`: Agente 4 (Redacción de memorial judicial boliviano en `.docx` y `.pdf`).
 - **`core/bufete_orchestrator.py`**: Orquestación y trazabilidad del flujo agéntico.
 - **`app_bufete.py`**: UI en Streamlit con pestaña dedicada de **Scraper & Buscador TCP**, Dictamen, Memorial .docx, Consultorio y Archivo Documental.
+
+### 3. Resiliencia del Bucle Agéntico y Auto-Continuación (Post-Corte & Zero-Truncation)
+- **Causa Raíz de 'Detención a Medio Camino'**: El motor LLM alcanzaba el límite por defecto de tokens de salida (`finish_reason == 'length'`) en documentos legales extensos (Dictamen y Memorial), cortando el análisis en las últimas secciones. Adicionalmente, auditorías de múltiples piezas consecutivas podían disparar cuotas TPM/RPM (429) sin backoff.
+- **Bucle Agéntico de Continuación (`auto_continuar=True`)**: `core/llm_client.py` detecta si `finish_reason == 'length'`, preserva el contexto acumulado y encadena automáticamente hasta 3 ciclos de continuación sin repetición hasta alcanzar el final formal (`finish_reason == 'stop'`).
+- **Backoff Defensivo y Gestión de Modelos**: Pausa de 2.0s ante 429 rate limit y salvaguarda de fallback entre modelos (Llama-3.3-70b, Llama-3.1-8b, Qwen, etc.).
+- **Credenciales Dinámicas en UI**: Soporte de ingreso o actualización de `GROQ_API_KEY` directamente en la barra lateral si el entorno carece de secretos precargados.
+

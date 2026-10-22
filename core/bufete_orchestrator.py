@@ -54,7 +54,7 @@ class OrquestadorBufete:
             a for a in os.listdir(carpeta_caso)
             if a.endswith((".pdf", ".txt", ".docx"))
             and not a.startswith(("Dictamen_", "Memorial_"))
-            and not a.endswith((".cache.txt", ".ficha_auditada.json", "meta.json"))
+            and not a.endswith((".cache.txt", ".ocr_cache.txt", ".ficha_auditada.json", "meta.json"))
         ]
         logs_proceso.append(f"📁 [EXPEDIENTE] {len(archivos_disco)} piezas probatorias localizadas.")
 

@@ -94,12 +94,14 @@ INSTRUCCIONES Y REQUERIMIENTO DEL CLIENTE:
 {precedente_texto}
 
 INFORME FORENSE DE DOCUMENTOS Y HECHOS ACREDITADOS:
-{informe_auditoria_evidencia}
+{informe_auditoria_evidencia[:12000]}
 """
         return self.llm.invocar(
             mensajes=[
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": prompt_usuario}
             ],
-            temperatura=0.05
+            temperatura=0.05,
+            max_tokens=4096,
+            auto_continuar=True
         )

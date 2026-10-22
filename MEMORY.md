@@ -30,5 +30,15 @@
 ### 4. Gestión Defensiva de Ventana de Contexto (Fix Error 400 'reduce the length of the messages or completion')
 - **Causa Raíz**: Modelos con ventanas de contexto reducidas (8,192 tokens como Qwen o Gemma) no toleran la suma de prompts forenses acumulados (~4,500 tokens) más cuotas altas de salida (`max_tokens=4096`), superando el límite duro de la API de Groq (8,192 tokens totales).
 - **Auto-Recuperación y Auto-Escalado (128k Fallback)**: `core/llm_client.py` captura activamente errores de contexto excedido y conmuta instantáneamente a modelos con 128,000 tokens de contexto (`llama-3.3-70b-versatile` o `llama-3.1-8b-instant`).
-- **Presupuesto Proactivo de Tokens**: Ajuste dinámico de `tokens_efectivos = max(1000, min(tokens_salida, 7800 - tokens_estimados))` en modelos de 8k para garantizar que ningún llamado exceda la capacidad del modelo elegido.
-- **Transparencia en UI**: Selector de modelos en la barra lateral con insignias de capacidad (`128k - Recomendado`, `128k - Rápido`, `8k - Contexto Estrecho`).
+- **Transparencia en UI**: Selector de modelos en la barra lateral con insignias de capacidad (`128k - Recomendado`, `128k - Rápido`, `8k - No recomendado para expedientes`).
+
+### 5. Presupuesto Matemático Proactivo Anti-Error 400 (Groq Free Tier Ceiling de 6,000 TPM)
+- **Causa Raíz Real del Error 400**: En la capa gratuita de Groq, la organización impone un límite de **6,000 TPM** (Tokens Por Minuto) y rechaza con HTTP 400 (`reduce the length of the messages or completion`) cualquier petición individual donde `prompt_tokens + max_tokens > 6,000`. Al solicitar `max_tokens=3200` sobre prompts de ~3,500 tokens (informes de auditoría de múltiples contratos), la suma daba > 6,700 tokens, fallando incluso en Llama 3.3 70b.
+- **Blindaje Proactivo (`MAX_REQUEST_TOTAL_TOKENS = 4200`)**: En lugar de esperar a que ocurra un error 400, `core/llm_client.py` ahora calcula y normaliza el presupuesto *antes* de enviar la petición:
+  1. Clampa la salida a un valor óptimo (1,000 tokens en JSON, 1,800 tokens en dictamen/memorial).
+  2. Ajusta proporcionalmente los fragmentos probatorios extensos para que el prompt nunca exceda 2,400 tokens (~7,200 caracteres).
+  3. La suma total nunca supera 4,200 tokens, quedando matemáticamente blindada bajo el techo de 6,000 TPM de Groq.
+- **Bucle de Continuación Ligero**: El bucle de auto-continuación no reenvía el texto acumulado completo (lo que inflaba el prompt a miles de tokens), sino únicamente las últimas 600 letras como anclaje sintáctico en un prompt de ~250 tokens con `max_tokens=1200`.
+- **Elección Óptima de Agente/Modelo**:
+  - `🌟 llama-3.3-70b-versatile`: Modelo principal recomendado (máxima calidad analítica y jurisprudencial).
+  - `⚡ llama-3.1-8b-instant`: Modelo secundario recomendado (ultra rápido, latencia mínima).

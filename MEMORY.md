@@ -27,4 +27,8 @@
 - **Bucle Agéntico de Continuación (`auto_continuar=True`)**: `core/llm_client.py` detecta si `finish_reason == 'length'`, preserva el contexto acumulado y encadena automáticamente hasta 3 ciclos de continuación sin repetición hasta alcanzar el final formal (`finish_reason == 'stop'`).
 - **Backoff Defensivo y Gestión de Modelos**: Pausa de 2.0s ante 429 rate limit y salvaguarda de fallback entre modelos (Llama-3.3-70b, Llama-3.1-8b, Qwen, etc.).
 - **Credenciales Dinámicas en UI**: Soporte de ingreso o actualización de `GROQ_API_KEY` directamente en la barra lateral si el entorno carece de secretos precargados.
-
+### 4. Gestión Defensiva de Ventana de Contexto (Fix Error 400 'reduce the length of the messages or completion')
+- **Causa Raíz**: Modelos con ventanas de contexto reducidas (8,192 tokens como Qwen o Gemma) no toleran la suma de prompts forenses acumulados (~4,500 tokens) más cuotas altas de salida (`max_tokens=4096`), superando el límite duro de la API de Groq (8,192 tokens totales).
+- **Auto-Recuperación y Auto-Escalado (128k Fallback)**: `core/llm_client.py` captura activamente errores de contexto excedido y conmuta instantáneamente a modelos con 128,000 tokens de contexto (`llama-3.3-70b-versatile` o `llama-3.1-8b-instant`).
+- **Presupuesto Proactivo de Tokens**: Ajuste dinámico de `tokens_efectivos = max(1000, min(tokens_salida, 7800 - tokens_estimados))` en modelos de 8k para garantizar que ningún llamado exceda la capacidad del modelo elegido.
+- **Transparencia en UI**: Selector de modelos en la barra lateral con insignias de capacidad (`128k - Recomendado`, `128k - Rápido`, `8k - Contexto Estrecho`).

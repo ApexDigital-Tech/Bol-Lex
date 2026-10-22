@@ -126,9 +126,20 @@ with st.sidebar:
     else:
         st.success(f"🤖 IA Activa: `{orquestador.motor_llm.modelo_activo}`")
         # Selector de modelos
-        modelos_opt = orquestador.motor_llm.modelos_disponibles
-        idx_actual = modelos_opt.index(orquestador.motor_llm.modelo_activo) if orquestador.motor_llm.modelo_activo in modelos_opt else 0
-        mod_elegido = st.selectbox("Cambiar Modelo Groq:", options=modelos_opt, index=idx_actual)
+        def formatear_modelo(m: str) -> str:
+            if "3.3" in m:
+                return f"🌟 {m} (128k - Recomendado)"
+            if "3.1-8b" in m:
+                return f"⚡ {m} (128k - Rápido)"
+            if "3.1-70b" in m:
+                return f"💎 {m} (128k - Avanzado)"
+            if "mixtral" in m:
+                return f"🚀 {m} (32k)"
+            if any(k in m for k in ["8192", "gemma", "qwen"]):
+                return f"⚠️ {m} (8k - Contexto Estrecho)"
+            return m
+
+        mod_elegido = st.selectbox("Cambiar Modelo Groq:", options=modelos_opt, index=idx_actual, format_func=formatear_modelo)
         if mod_elegido != orquestador.motor_llm.modelo_activo:
             orquestador.motor_llm.cambiar_modelo(mod_elegido)
             st.rerun()

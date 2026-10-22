@@ -53,6 +53,7 @@ DOCUMENTOS ADJUNTOS EN EXPEDIENTE:
                     {"role": "user", "content": prompt_usuario}
                 ],
                 temperatura=0.0,
+                max_tokens=1000,
                 json_mode=True
             )
             return json.loads(raw_json)

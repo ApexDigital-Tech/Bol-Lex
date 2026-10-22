@@ -128,17 +128,31 @@ class MotorLLM:
         if not self.cliente:
             raise RuntimeError("API Key de Groq no configurada. Configure GROQ_API_KEY en el entorno o en la barra lateral.")
 
-        tokens_salida = max_tokens if max_tokens else (2048 if json_mode else 4096)
+        tokens_salida = max_tokens if max_tokens else (2048 if json_mode else 3500)
         intentos = [self.modelo_activo] + [m for m in self.modelos_disponibles if m != self.modelo_activo]
         ultimo_error = None
 
+        # Estimación conservadora de tokens del prompt (español ~3.2 caracteres por token)
+        caracteres_totales = sum(len(m.get("content", "")) for m in mensajes)
+        tokens_estimados = int(caracteres_totales / 3.2)
+
         for mod in intentos:
+            es_modelo_8k = any(k in mod.lower() for k in ["8192", "gemma", "qwen"])
+            
+            # Ajuste preventivo para modelos de contexto estrecho (8k)
+            tokens_efectivos = tokens_salida
+            if es_modelo_8k:
+                # Si el prompt ya consume la mayor parte de la ventana de 8k, saltar a modelo 128k
+                if tokens_estimados > 5500:
+                    continue
+                tokens_efectivos = max(1000, min(tokens_salida, 7800 - tokens_estimados))
+
             try:
                 params: Dict[str, Any] = {
                     "model": mod,
                     "messages": mensajes,
                     "temperature": temperatura,
-                    "max_tokens": tokens_salida
+                    "max_tokens": tokens_efectivos
                 }
                 if json_mode:
                     params["response_format"] = {"type": "json_object"}
@@ -166,7 +180,7 @@ class MotorLLM:
                         })
                         p_cont = dict(params)
                         p_cont["messages"] = mensajes_loop
-                        p_cont["max_tokens"] = tokens_salida
+                        p_cont["max_tokens"] = tokens_efectivos
                         res_cont = self.cliente.chat.completions.create(**p_cont)
                         siguiente_tramo = res_cont.choices[0].message.content or ""
                         contenido_acumulado = f"{contenido_acumulado}\n{siguiente_tramo}".strip()
@@ -182,12 +196,47 @@ class MotorLLM:
                 err_msg = str(e).lower()
                 ultimo_error = e
 
-                # Backoff defensivo ante saturación de cuota TPM/RPM
+                # 1. Recuperación automática ante Error 400 por límite de longitud de contexto
+                if any(k in err_msg for k in ["reduce the length of the messages", "context_length_exceeded", "maximum context length", "too large"]):
+                    # Conmutar de inmediato a modelos con ventana masiva de 128k (Llama 3.3 / Llama 3.1)
+                    modelos_128k = [m for m in self.modelos_disponibles if any(k in m for k in ["3.3", "3.1", "mixtral"])]
+                    recuperado = False
+                    for m128 in modelos_128k:
+                        if m128 != mod:
+                            try:
+                                p128 = dict(params)
+                                p128["model"] = m128
+                                p128["max_tokens"] = 3000
+                                res128 = self.cliente.chat.completions.create(**p128)
+                                self.modelo_activo = m128
+                                return res128.choices[0].message.content or ""
+                            except Exception:
+                                continue
+
+                    # Si aún excede, recortar preventivamente los mensajes de entrada y reintentar
+                    try:
+                        mensajes_recortados = []
+                        for m in mensajes:
+                            c = m.get("content", "")
+                            if len(c) > 4000:
+                                c = c[:3500] + "\n[...Texto sintetizado para preservar ventana de contexto...]"
+                            mensajes_recortados.append({"role": m["role"], "content": c})
+                        p_rec = dict(params)
+                        p_rec["messages"] = mensajes_recortados
+                        p_rec["max_tokens"] = 1500
+                        res_rec = self.cliente.chat.completions.create(**p_rec)
+                        self.modelo_activo = mod
+                        return res_rec.choices[0].message.content or ""
+                    except Exception:
+                        pass
+                    continue
+
+                # 2. Backoff defensivo ante saturación de cuota TPM/RPM (429)
                 if "rate_limit" in err_msg or "429" in err_msg:
                     time.sleep(2.0)
                     continue
 
-                # Conmutar si el modelo fue deprecado o no está habilitado
+                # 3. Conmutar si el modelo fue deprecado o no está habilitado (404)
                 if any(k in err_msg for k in ["model_not_found", "does not exist", "404", "decommissioned"]):
                     continue
 

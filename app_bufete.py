@@ -131,15 +131,15 @@ with st.sidebar:
 
         def formatear_modelo(m: str) -> str:
             if "3.3" in m:
-                return f"🌟 {m} (128k - Recomendado)"
+                return f"🌟 {m} (Recomendado - 128k Máxima Calidad)"
             if "3.1-8b" in m:
-                return f"⚡ {m} (128k - Rápido)"
+                return f"⚡ {m} (Ultra Rápido - 128k)"
             if "3.1-70b" in m:
-                return f"💎 {m} (128k - Avanzado)"
+                return f"💎 {m} (Avanzado - 128k)"
             if "mixtral" in m:
                 return f"🚀 {m} (32k)"
             if any(k in m for k in ["8192", "gemma", "qwen"]):
-                return f"⚠️ {m} (8k - Contexto Estrecho)"
+                return f"⚠️ {m} (8k - No recomendado para expedientes)"
             return m
 
         mod_elegido = st.selectbox("Cambiar Modelo Groq:", options=modelos_opt, index=idx_actual, format_func=formatear_modelo)

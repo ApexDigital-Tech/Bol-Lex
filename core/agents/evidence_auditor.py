@@ -75,7 +75,7 @@ DOCUMENTO AUDITADO: {nombre_archivo}
 
 TEXTO REAL EXTRAÍDO:
 \"\"\"
-{texto_extraido[:5500]}
+{texto_extraido[:4000]}
 \"\"\"
 """
         try:
@@ -85,7 +85,7 @@ TEXTO REAL EXTRAÍDO:
                     {"role": "user", "content": prompt_usuario}
                 ],
                 temperatura=0.0,
-                max_tokens=1500,
+                max_tokens=1000,
                 json_mode=True
             )
             ficha = json.loads(raw_res)

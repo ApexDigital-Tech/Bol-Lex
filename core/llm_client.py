@@ -10,8 +10,8 @@ from groq import Groq
 # Modelos candidatos ordenados por capacidad de razonamiento jurídico y velocidad
 CANDIDATOS_PRIORITARIOS = [
     "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
     "llama-3.1-8b-instant",
+    "llama-3.1-70b-versatile",
     "llama3-70b-8192",
     "llama3-8b-8192",
     "mixtral-8x7b-32768",
@@ -33,7 +33,7 @@ class MotorLLM:
         self.api_key = api_key
         self.cliente = None
         self.modelos_disponibles: List[str] = list(CANDIDATOS_PRIORITARIOS)
-        self.modelo_activo: str = "llama-3.1-8b-instant"
+        self.modelo_activo: str = "llama-3.3-70b-versatile"
 
         if self.api_key:
             try:
@@ -106,10 +106,9 @@ class MotorLLM:
         auto_continuar: bool = True
     ) -> str:
         """
-        Ejecuta la inferencia con fallback dinámico y bucle agéntico de auto-continuación si finish_reason == 'length'.
+        Ejecuta la inferencia con blindaje proactivo contra error 400 (TPM/Context Limit) y bucle de continuación ligero.
         """
         if not self.cliente:
-            # Reintento tardío de resolución de credenciales
             if not self.api_key:
                 self.api_key = os.environ.get("GROQ_API_KEY", "")
             if not self.api_key:
@@ -128,31 +127,77 @@ class MotorLLM:
         if not self.cliente:
             raise RuntimeError("API Key de Groq no configurada. Configure GROQ_API_KEY en el entorno o en la barra lateral.")
 
-        tokens_salida = max_tokens if max_tokens else (2048 if json_mode else 3500)
-        intentos = [self.modelo_activo] + [m for m in self.modelos_disponibles if m != self.modelo_activo]
+        # =====================================================================
+        # BLINDAJE PROACTIVO CONTRA ERROR 400 (Groq TPM / Request Budget Ceiling)
+        # Techo máximo total de tokens por petición = 4,200 (margen seguro sobre 6,000 TPM)
+        # =====================================================================
+        MAX_REQUEST_TOTAL_TOKENS = 4200
+        
+        # 1. Determinar presupuesto de salida base
+        if json_mode:
+            target_tokens_salida = min(max_tokens or 1000, 1200)
+        else:
+            target_tokens_salida = min(max_tokens or 1800, 1800)
+
+        # 2. Presupuesto disponible para el prompt (en español ~3.0 caracteres/token)
+        presupuesto_prompt_tokens = MAX_REQUEST_TOTAL_TOKENS - target_tokens_salida
+        max_chars_prompt = int(presupuesto_prompt_tokens * 3.0)
+
+        # 3. Normalizar y recortar defensivamente los mensajes si superan el presupuesto
+        mensajes_procesados = []
+        chars_actuales = sum(len(m.get("content", "")) for m in mensajes)
+        
+        if chars_actuales > max_chars_prompt:
+            factor = (max_chars_prompt * 0.95) / chars_actuales
+            for m in mensajes:
+                c = m.get("content", "")
+                if len(c) > 1000:
+                    nuevo_tam = int(len(c) * factor)
+                    c_rec = c[:nuevo_tam] + "\n[...Texto documental resumido para preservar ventana de procesamiento agéntico...]"
+                    mensajes_procesados.append({"role": m["role"], "content": c_rec})
+                else:
+                    mensajes_procesados.append(dict(m))
+        else:
+            mensajes_procesados = [dict(m) for m in mensajes]
+
+        # Recalcular tokens reales estimados
+        chars_finales = sum(len(m.get("content", "")) for m in mensajes_procesados)
+        tokens_prompt_est = int(chars_finales / 3.0)
+        tokens_efectivos = max(800, min(target_tokens_salida, MAX_REQUEST_TOTAL_TOKENS - tokens_prompt_est))
+
+        # Lista de modelos a intentar: modelo activo primero, luego los 128k más potentes
+        modelos_prioridad = [
+            self.modelo_activo,
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama-3.1-70b-versatile",
+            "mixtral-8x7b-32768",
+        ]
+        intentos = []
+        for m in modelos_prioridad:
+            if m in self.modelos_disponibles and m not in intentos:
+                intentos.append(m)
+        for m in self.modelos_disponibles:
+            if m not in intentos:
+                intentos.append(m)
+
         ultimo_error = None
 
-        # Estimación conservadora de tokens del prompt (español ~3.2 caracteres por token)
-        caracteres_totales = sum(len(m.get("content", "")) for m in mensajes)
-        tokens_estimados = int(caracteres_totales / 3.2)
-
         for mod in intentos:
-            es_modelo_8k = any(k in mod.lower() for k in ["8192", "gemma", "qwen"])
-            
-            # Ajuste preventivo para modelos de contexto estrecho (8k)
-            tokens_efectivos = tokens_salida
-            if es_modelo_8k:
-                # Si el prompt ya consume la mayor parte de la ventana de 8k, saltar a modelo 128k
-                if tokens_estimados > 5500:
-                    continue
-                tokens_efectivos = max(1000, min(tokens_salida, 7800 - tokens_estimados))
+            es_8k = any(k in mod.lower() for k in ["8192", "gemma", "qwen"])
+            tokens_mod = tokens_efectivos
+            mensajes_mod = list(mensajes_procesados)
+
+            # Si es un modelo 8k, ajustar aún más conservador
+            if es_8k:
+                tokens_mod = min(tokens_efectivos, 1200)
 
             try:
                 params: Dict[str, Any] = {
                     "model": mod,
-                    "messages": mensajes,
+                    "messages": mensajes_mod,
                     "temperature": temperatura,
-                    "max_tokens": tokens_efectivos
+                    "max_tokens": tokens_mod
                 }
                 if json_mode:
                     params["response_format"] = {"type": "json_object"}
@@ -161,26 +206,35 @@ class MotorLLM:
                 contenido_inicial = res.choices[0].message.content or ""
                 finish_reason = getattr(res.choices[0], "finish_reason", "stop")
 
-                # Bucle Agéntico de Continuación si fue truncado por longitud
+                # Bucle de Continuación Ligero (no re-envía todo el historial para no saturar tokens)
                 if auto_continuar and not json_mode and finish_reason == "length":
                     contenido_acumulado = contenido_inicial
-                    mensajes_loop = list(mensajes)
                     ciclos_cont = 0
-                    max_ciclos = 3
+                    max_ciclos = 2
 
                     while finish_reason == "length" and ciclos_cont < max_ciclos:
                         ciclos_cont += 1
-                        mensajes_loop.append({"role": "assistant", "content": contenido_acumulado})
-                        mensajes_loop.append({
-                            "role": "user",
-                            "content": (
-                                "Continúa redactando exactamente desde donde se interrumpió la última palabra del texto anterior. "
-                                "Prohibido repetir lo ya redactado. Mantén la estructura formal, coherencia técnica y completa todas las secciones faltantes hasta concluir."
-                            )
-                        })
-                        p_cont = dict(params)
-                        p_cont["messages"] = mensajes_loop
-                        p_cont["max_tokens"] = tokens_efectivos
+                        corte_contexto = contenido_acumulado[-600:].strip()
+                        mensajes_cont = [
+                            {
+                                "role": "system", 
+                                "content": "Eres un asistente jurídico boliviano de alta precisión técnica. Continúa exactamente donde quedó el texto anterior sin repetir nada."
+                            },
+                            {
+                                "role": "user", 
+                                "content": (
+                                    f"El texto anterior se interrumpió exactamente en este punto:\n\"\"\"...{corte_contexto}\"\"\"\n\n"
+                                    "Continúa redactando a partir de la siguiente palabra. "
+                                    "No repitas nada de lo ya escrito. Concluye de forma exhaustiva todas las secciones y fundamentaciones restantes."
+                                )
+                            }
+                        ]
+                        p_cont = {
+                            "model": mod,
+                            "messages": mensajes_cont,
+                            "temperature": temperatura,
+                            "max_tokens": 1200
+                        }
                         res_cont = self.cliente.chat.completions.create(**p_cont)
                         siguiente_tramo = res_cont.choices[0].message.content or ""
                         contenido_acumulado = f"{contenido_acumulado}\n{siguiente_tramo}".strip()
@@ -196,51 +250,42 @@ class MotorLLM:
                 err_msg = str(e).lower()
                 ultimo_error = e
 
-                # 1. Recuperación automática ante Error 400 por límite de longitud de contexto
-                if any(k in err_msg for k in ["reduce the length of the messages", "context_length_exceeded", "maximum context length", "too large"]):
-                    # Conmutar de inmediato a modelos con ventana masiva de 128k (Llama 3.3 / Llama 3.1)
-                    modelos_128k = [m for m in self.modelos_disponibles if any(k in m for k in ["3.3", "3.1", "mixtral"])]
-                    recuperado = False
-                    for m128 in modelos_128k:
-                        if m128 != mod:
-                            try:
-                                p128 = dict(params)
-                                p128["model"] = m128
-                                p128["max_tokens"] = 3000
-                                res128 = self.cliente.chat.completions.create(**p128)
-                                self.modelo_activo = m128
-                                return res128.choices[0].message.content or ""
-                            except Exception:
-                                continue
-
-                    # Si aún excede, recortar preventivamente los mensajes de entrada y reintentar
+                # 1. Recuperación ante 400: reducción drástica de presupuesto y reintento con Llama 3.1 8b o 3.3 70b
+                if any(k in err_msg for k in ["reduce the length", "context_length_exceeded", "too large", "400"]):
                     try:
-                        mensajes_recortados = []
-                        for m in mensajes:
-                            c = m.get("content", "")
-                            if len(c) > 4000:
-                                c = c[:3500] + "\n[...Texto sintetizado para preservar ventana de contexto...]"
-                            mensajes_recortados.append({"role": m["role"], "content": c})
-                        p_rec = dict(params)
-                        p_rec["messages"] = mensajes_recortados
-                        p_rec["max_tokens"] = 1500
-                        res_rec = self.cliente.chat.completions.create(**p_rec)
-                        self.modelo_activo = mod
-                        return res_rec.choices[0].message.content or ""
+                        m_rescate = "llama-3.1-8b-instant" if "llama-3.1-8b-instant" in self.modelos_disponibles else mod
+                        mensajes_mini = []
+                        for m in mensajes_mod:
+                            c_mini = m.get("content", "")
+                            if len(c_mini) > 2000:
+                                c_mini = c_mini[:2000] + "\n[...Síntesis ejecutiva...]"
+                            mensajes_mini.append({"role": m["role"], "content": c_mini})
+                        
+                        p_rescate = {
+                            "model": m_rescate,
+                            "messages": mensajes_mini,
+                            "temperature": temperatura,
+                            "max_tokens": 1000
+                        }
+                        if json_mode:
+                            p_rescate["response_format"] = {"type": "json_object"}
+                        res_resc = self.cliente.chat.completions.create(**p_rescate)
+                        self.modelo_activo = m_rescate
+                        return res_resc.choices[0].message.content or ""
                     except Exception:
                         pass
                     continue
 
-                # 2. Backoff defensivo ante saturación de cuota TPM/RPM (429)
+                # 2. Backoff ante Rate Limit 429
                 if "rate_limit" in err_msg or "429" in err_msg:
                     time.sleep(2.0)
                     continue
 
-                # 3. Conmutar si el modelo fue deprecado o no está habilitado (404)
+                # 3. Modelo inexistente o deprecado (404)
                 if any(k in err_msg for k in ["model_not_found", "does not exist", "404", "decommissioned"]):
                     continue
 
-                raise e
+                continue
 
         if ultimo_error:
             raise ultimo_error

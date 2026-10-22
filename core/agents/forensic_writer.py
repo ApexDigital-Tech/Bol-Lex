@@ -68,7 +68,7 @@ SUMA O PETICIÓN CONCRETA: {suma_pretendida}
 NOTAS O INSTRUCCIONES COMPLEMENTARIAS: {instrucciones_especificas if instrucciones_especificas else 'Redacción forense integral y contundente.'}
 
 HECHOS Y EVIDENCIAS PROBADAS EN EL EXPEDIENTE:
-{evidencia_auditada[:6500]}
+{evidencia_auditada[:4000]}
 """
         return self.llm.invocar(
             mensajes=[
@@ -76,7 +76,7 @@ HECHOS Y EVIDENCIAS PROBADAS EN EL EXPEDIENTE:
                 {"role": "user", "content": prompt_usuario}
             ],
             temperatura=0.08,
-            max_tokens=3200,
+            max_tokens=1800,
             auto_continuar=True
         )
 

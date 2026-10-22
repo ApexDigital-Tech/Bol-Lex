@@ -126,6 +126,9 @@ with st.sidebar:
     else:
         st.success(f"🤖 IA Activa: `{orquestador.motor_llm.modelo_activo}`")
         # Selector de modelos
+        modelos_opt = orquestador.motor_llm.modelos_disponibles
+        idx_actual = modelos_opt.index(orquestador.motor_llm.modelo_activo) if orquestador.motor_llm.modelo_activo in modelos_opt else 0
+
         def formatear_modelo(m: str) -> str:
             if "3.3" in m:
                 return f"🌟 {m} (128k - Recomendado)"

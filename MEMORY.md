@@ -1,23 +1,23 @@
 # Bol-Lex AI: Architectural Decisions & System Memory
 
-## 2026-10-22: Consolidación PMV y Resiliencia del Motor de IA
+## 2026-10-22: Reestructuración Integral Agéntica Bol-Lex 3.0 (Zero-Hallucination & Scraper TCP)
 
-### 1. Problema Abordado
-- Error `404 - model_not_found` al invocar `llama-3.3-70b-versatile` en Groq desde Streamlit Cloud debido a modelos retirados, descontinuados o no autorizados para el API Key configurado.
-- Fallo latente en OCR por descontinuación de `llama-3.2-11b-vision-preview`.
-- Regresión funcional por remoción de módulos forenses de Memoriales (.docx), Consultorio interactivo y Archivo documental.
+### 1. Causas de Falla Anteriores
+- **Alucinación Forzada por RAG Monotemático**: El sistema anterior poseía un único fallo en su base (`SCP 0084/2017-S3`, fuero de maternidad laboral) e inyectaba obligatoriamente esa sentencia en controversias de contratos y deudas de empresas públicas (EBC/Ecotraffic), forzando a la IA a requerir certificados de embarazo en litigios comerciales.
+- **Falla de Extracción Silenciosa**: PDFs escaneados retornaban cadenas vacías sin diagnóstico visible, provocando que la IA dedujera la ausencia total de documentos.
+- **Monolito de Código**: Más de 700 líneas acopladas en un solo archivo `app_bufete.py`.
 
-### 2. Decisiones Arquitectónicas (ADR)
-- **Selección Dinámica y Fallback en Cascada**:
-  - `inicializar_motor_ia()` consulta `cliente.models.list()` para descubrir los modelos activos de la cuenta.
-  - Ejecuta una prueba en caliente (*dry-run* con `max_tokens=2`) verificando respuesta HTTP 200 antes de asignar el modelo.
-  - Prioridad: `llama-3.3-70b-versatile` -> `llama-3.1-70b-versatile` -> `llama-3.1-8b-instant` -> `mixtral-8x7b-32768` -> `gemma2-9b-it` -> primer modelo válido.
-  - `invocar_groq_con_fallback()` conmuta automáticamente de modelo durante el procesamiento si se detecta `model_not_found`, `does not exist` o `404`.
-- **OCR Híbrido y Defensivo**:
-  - Prioridad 1: Extracción digital directa con `PdfReader`.
-  - Prioridad 2: `RapidOCR` local con `pypdfium2` (sin depender de APIs de visión externas volátiles).
-- **Consolidación de Módulos PMV**:
-  - Pestaña 1: Dictamen y Diagnóstico Jurídico (con descarga en PDF).
-  - Pestaña 2: Redactor Forense de Memoriales (con descarga en Word `.docx` y PDF).
-  - Pestaña 3: Consultorio Jurídico y Análisis de Conexidad Global Intercasos.
-  - Pestaña 4: Archivo Documental del Expediente Activo.
+### 2. Nueva Arquitectura Modular Agéntica (Bol-Lex 3.0)
+- **`core/llm_client.py`**: Motor de inferencia Groq con descubrimiento dinámico y fallback en cascada.
+- **`core/extractor.py`**: Extractor híbrido (digital nativo + OCR local con RapidOCR) con diagnóstico de legibilidad por página. Si un documento es ilegible, emite advertencia explícita en lugar de texto vacío.
+- **`core/jurisprudencia/`**:
+  - `corpus_data.py`: Corpus verificado y clasificado en Civil, Contrataciones Estatales (DS 0181 / Ley 1178), Constitucional (Amparo), Laboral y Penal.
+  - `tcp_scraper.py`: Motor de búsqueda y scraping para resoluciones del Tribunal Constitucional Plurinacional (Aletheia / tcpbolivia.bo).
+  - `rag_engine.py`: Búsqueda semántica con **aislamiento estricto de materia** (un caso civil jamás consulta ni recibe fallos laborales).
+- **`core/agents/` (Equipo Agéntico Senior)**:
+  - `director.py`: Agente 1 (Triaje, calificación jurídica y vía procesal).
+  - `evidence_auditor.py`: Agente 2 (Auditoría probatoria estricta, hechos 100% certificados, prohibición de inventar supuestos).
+  - `specialist.py`: Agente 3 (Dictamen estratégico según materia procesal y subsunción del precedente vinculante real).
+  - `forensic_writer.py`: Agente 4 (Redacción de memorial judicial boliviano en `.docx` y `.pdf`).
+- **`core/bufete_orchestrator.py`**: Orquestación y trazabilidad del flujo agéntico.
+- **`app_bufete.py`**: UI en Streamlit con pestaña dedicada de **Scraper & Buscador TCP**, Dictamen, Memorial .docx, Consultorio y Archivo Documental.

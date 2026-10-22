@@ -1,4 +1,4 @@
-﻿streamlit
+streamlit
 pypdf
 python-docx
 markdown-pdf
@@ -12,3 +12,5 @@ pypdfium2
 numpy
 pillow
 gdown
+beautifulsoup4
+requests
